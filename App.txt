@@ -1,0 +1,530 @@
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import Sidebar from './components/Sidebar';
+import VitalCard from './components/VitalCard';
+import RiskGauge from './components/RiskGauge';
+import { ICONS, THRESHOLDS, COLORS } from './constants';
+import { UserRole, User, VitalRecord, RiskLevel, HealthPattern, PatientSummary } from './types';
+import { generateVitalRecord, calculateRisk, MOCK_PATIENTS, DETECTED_PATTERNS, generateHistoricalData } from './services/mockData';
+import { generateHealthInsights } from './services/geminiService';
+import { 
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
+} from 'recharts';
+
+type Timeframe = '24h' | '7d' | '30d';
+type Metric = 'heartRate' | 'spo2' | 'temperature';
+
+interface DoctorPatient extends PatientSummary {
+  ward: string;
+  bed: string;
+  lastAlertTitle: string;
+  lastAlertTime: string;
+  vitalHR: number;
+  vitalBP: string;
+  vitalTemp: string;
+}
+
+const DOCTOR_PATIENTS: DoctorPatient[] = [
+  { ...MOCK_PATIENTS[0], ward: 'Ward 3B', bed: 'Bed 12', lastAlertTitle: 'Arrhythmia', lastAlertTime: '2 mins ago', vitalHR: 145, vitalBP: '140/90', vitalTemp: '98.6', riskLevel: RiskLevel.HIGH },
+  { ...MOCK_PATIENTS[2], ward: 'Ward 2A', bed: 'Bed 04', lastAlertTitle: 'BP Fluctuation', lastAlertTime: '1 hour ago', vitalHR: 78, vitalBP: '135/88', vitalTemp: '99.1', riskLevel: RiskLevel.MEDIUM },
+  { ...MOCK_PATIENTS[1], ward: 'Ward 4C', bed: 'Bed 10', lastAlertTitle: 'Stable', lastAlertTime: '15 mins ago', vitalHR: 72, vitalBP: '120/80', vitalTemp: '98.4', riskLevel: RiskLevel.LOW },
+  { ...MOCK_PATIENTS[3], ward: 'Ward 1A', bed: 'Bed 02', lastAlertTitle: 'Routine Check', lastAlertTime: '2 hours ago', vitalHR: 68, vitalBP: '118/76', vitalTemp: '98.6', riskLevel: RiskLevel.LOW },
+  { ...MOCK_PATIENTS[4], ward: 'Ward 2B', bed: 'Bed 05', lastAlertTitle: 'Low Grade Fever', lastAlertTime: '3 hours ago', vitalHR: 75, vitalBP: '122/80', vitalTemp: '100.2', riskLevel: RiskLevel.MEDIUM },
+];
+
+const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [vitalsHistory, setVitalsHistory] = useState<VitalRecord[]>([]);
+  const [aiInsights, setAiInsights] = useState<string>('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
+  const [historyTimeframe, setHistoryTimeframe] = useState<Timeframe>('7d');
+  const [historyMetric, setHistoryMetric] = useState<Metric>('heartRate');
+  const [historicalData, setHistoricalData] = useState<VitalRecord[]>([]);
+
+  const vitalsRef = useRef<VitalRecord[]>([]);
+
+  const handleLogin = (role: UserRole) => {
+    setIsLoggingIn(true);
+    setTimeout(() => {
+      setUser({
+        id: role === UserRole.PATIENT ? 'p1' : 'd1',
+        name: role === UserRole.PATIENT ? 'John Doe' : 'Dr. Sarah Smith',
+        email: role === UserRole.PATIENT ? 'user@vitalwatch.ai' : 'sarah@clinic.com',
+        role: role
+      });
+      if (role === UserRole.DOCTOR) setActiveTab('patients');
+      else setActiveTab('analytics');
+      setIsLoggingIn(false);
+    }, 800);
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    const initialVitals = Array.from({ length: 50 }, (_, i) => generateVitalRecord());
+    setVitalsHistory(initialVitals);
+    vitalsRef.current = initialVitals;
+
+    const interval = setInterval(() => {
+      setVitalsHistory(prev => {
+        const last = prev[prev.length - 1];
+        const next = generateVitalRecord(last);
+        const updated = [...prev, next].slice(-50);
+        vitalsRef.current = updated;
+        return updated;
+      });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  useEffect(() => {
+    if (activeTab === 'history' || activeTab === 'analytics') {
+      const days = historyTimeframe === '24h' ? 1 : historyTimeframe === '7d' ? 7 : 30;
+      const interval = historyTimeframe === '24h' ? 15 : historyTimeframe === '7d' ? 60 : 120;
+      setHistoricalData(generateHistoricalData(days, interval));
+    }
+  }, [activeTab, historyTimeframe]);
+
+  const requestAI = async () => {
+    if (!user || vitalsRef.current.length < 5) return;
+    setIsAnalyzing(true);
+    const result = await generateHealthInsights(vitalsRef.current, user.name);
+    setAiInsights(result);
+    setIsAnalyzing(false);
+  };
+
+  useEffect(() => {
+    if (user && !aiInsights && user.role === UserRole.PATIENT) requestAI();
+  }, [user]);
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-[40px] p-12 text-center shadow-2xl shadow-slate-200 border border-slate-100 animate-fade-in">
+          <div className="w-20 h-20 bg-[#0EA5E9] rounded-[24px] flex items-center justify-center mx-auto mb-10 shadow-xl shadow-sky-100 animate-bounce">
+            <ICONS.Heart className="w-12 h-12 text-white" />
+          </div>
+          <h1 className="text-4xl font-black text-slate-900 mb-2 tracking-tighter">VitalWatch AI</h1>
+          <p className="text-slate-500 mb-12 text-sm font-semibold uppercase tracking-widest">Clinical Monitoring Core</p>
+          <div className="space-y-4">
+            <button onClick={() => handleLogin(UserRole.PATIENT)} className="w-full bg-[#0EA5E9] hover:bg-sky-600 text-white font-bold py-5 rounded-2xl transition-all shadow-lg shadow-sky-100 flex items-center justify-center space-x-3 group">
+              <span>CONTINUE AS PATIENT</span>
+              <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+            </button>
+            <button onClick={() => handleLogin(UserRole.DOCTOR)} className="w-full bg-slate-50 hover:bg-slate-100 text-slate-800 font-bold py-5 rounded-2xl border border-slate-200 transition-all">
+              MEDICAL STAFF ACCESS
+            </button>
+          </div>
+          <p className="mt-12 text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-relaxed">
+            HIPAA COMPLIANT • END-TO-END ENCRYPTED • AI-POWERED
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const latest = vitalsHistory[vitalsHistory.length - 1] || generateVitalRecord();
+  const riskScore = 24 + (latest.heartRate > 110 ? 40 : latest.heartRate > 90 ? 10 : 0);
+
+  return (
+    <div className="flex min-h-screen">
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} userRole={user.role} userName={user.name} />
+      
+      <main className="flex-1 ml-72 p-10 overflow-x-hidden">
+        {/* Page Header */}
+        <header className="flex justify-between items-start mb-10">
+          <div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight">
+              {activeTab === 'patients' ? 'Patient Management' : 
+               activeTab === 'analytics' ? 'AI Health Assessment' : 
+               activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}
+            </h1>
+            <p className="text-slate-400 mt-1 font-semibold text-sm">
+              {activeTab === 'analytics' ? 'Real-time analysis based on your latest vitals' : 'System overview and live telemetry'}
+            </p>
+          </div>
+          <div className="flex items-center space-x-6">
+            <div className="relative w-80">
+              <ICONS.Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input type="text" placeholder="Search records..." className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:ring-4 focus:ring-sky-50 transition-all" />
+            </div>
+            <button className="p-3 bg-white border border-slate-200 rounded-2xl text-slate-400 hover:text-slate-900 transition-colors relative group">
+              <ICONS.Bell className="w-5 h-5 group-hover:scale-110 transition-transform" />
+              <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+            </button>
+            <button className="bg-[#0EA5E9] hover:bg-sky-600 text-white px-8 py-3 rounded-2xl font-black text-sm flex items-center space-x-2 shadow-lg shadow-sky-100 transition-all hover:-translate-y-1">
+              <ICONS.Plus className="w-5 h-5" />
+              <span>{user.role === UserRole.DOCTOR ? 'New Patient' : 'Add Data'}</span>
+            </button>
+          </div>
+        </header>
+
+        {activeTab === 'patients' && user.role === UserRole.DOCTOR && (
+          <div className="space-y-8 animate-fade-in">
+            <div className="grid grid-cols-4 gap-6">
+              {[
+                { label: 'Critical Alerts', val: '3', sub: '+2 since yesterday', icon: <ICONS.Heart />, color: 'red', border: 'red-500' },
+                { label: 'Warnings', val: '12', sub: 'Requiring observation', icon: <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>, color: 'amber', border: 'amber-400' },
+                { label: 'Stable Patients', val: '48', sub: '95% within range', icon: <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>, color: 'green', border: 'green-500' },
+              ].map((c, i) => (
+                <div key={i} className="bg-white p-7 rounded-[32px] border border-slate-200 flex flex-col justify-between relative overflow-hidden group">
+                  <div className={`absolute top-0 left-0 w-1.5 h-full bg-${c.border}`}></div>
+                  <div className="flex justify-between items-start">
+                     <div className={`bg-${c.color}-50 p-3 rounded-2xl text-${c.color}-500`}>
+                       <div className="w-6 h-6">{c.icon}</div>
+                     </div>
+                     <div className="text-right">
+                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{c.label}</p>
+                       <p className="text-3xl font-black text-slate-900 mt-1">{c.val}</p>
+                     </div>
+                  </div>
+                  <div className={`flex items-center text-[11px] font-bold mt-6 text-${c.color}-600`}>
+                    {c.sub.includes('+') && <ICONS.TrendingUp className="w-4 h-4 mr-1" />}
+                    <span>{c.sub}</span>
+                  </div>
+                </div>
+              ))}
+              <div className="bg-gradient-to-br from-sky-500 to-sky-700 p-7 rounded-[32px] text-white shadow-xl shadow-sky-100 flex flex-col justify-between relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -mr-10 -mt-10 group-hover:scale-110 transition-transform"></div>
+                <div className="flex justify-between items-start z-10">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-70">AI Insights</p>
+                    <h3 className="text-xl font-black mt-1">Anomaly Detected</h3>
+                  </div>
+                  <div className="bg-white/20 p-2.5 rounded-xl">
+                    <ICONS.Sparkles className="w-5 h-5 text-white" />
+                  </div>
+                </div>
+                <p className="text-xs font-medium leading-relaxed opacity-90 mt-4 z-10">
+                  Pattern irregularity found in Ward 3B telemetry data. Review recommended.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-[40px] border border-slate-200 overflow-hidden shadow-sm">
+              <div className="p-10 border-b border-slate-100 flex justify-between items-center">
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight">Active Patient List</h2>
+                <div className="flex space-x-3">
+                  <button className="flex items-center space-x-2 px-6 py-2.5 border border-slate-200 rounded-2xl text-[11px] font-black text-slate-600 hover:bg-slate-50 transition-all">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+                    <span>FILTER</span>
+                  </button>
+                  <button className="flex items-center space-x-2 px-6 py-2.5 border border-slate-200 rounded-2xl text-[11px] font-black text-slate-600 hover:bg-slate-50 transition-all">
+                    <ICONS.Download className="w-4 h-4" />
+                    <span>EXPORT</span>
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="text-slate-400 text-[10px] font-black uppercase tracking-widest bg-slate-50/50">
+                      <th className="px-10 py-6">Patient Name</th>
+                      <th className="px-10 py-6">ID / Age</th>
+                      <th className="px-10 py-6 text-center">Risk Level</th>
+                      <th className="px-10 py-6">Last Alert</th>
+                      <th className="px-10 py-6">Vitals Status</th>
+                      <th className="px-10 py-6">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {DOCTOR_PATIENTS.map((p, idx) => (
+                      <tr key={p.id} className="hover:bg-slate-50/80 transition-colors group cursor-pointer" style={{ animationDelay: `${idx * 0.05}s` }}>
+                        <td className="px-10 py-7">
+                          <div className="flex items-center space-x-5">
+                            <img src={`https://picsum.photos/seed/${p.name}/48/48`} className="w-12 h-12 rounded-2xl border border-slate-200 shadow-sm" alt="pt" />
+                            <div>
+                              <p className="text-sm font-black text-slate-900 tracking-tight">{p.name}</p>
+                              <p className="text-[11px] text-slate-400 font-bold uppercase tracking-widest mt-1 opacity-70">{p.ward} • {p.bed}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-10 py-7">
+                          <p className="text-sm font-bold text-slate-800 tracking-tight">#{p.id.replace('p', '9928')}</p>
+                          <p className="text-[11px] text-slate-400 font-bold uppercase tracking-widest mt-1">{p.age} yrs • {p.gender.charAt(0)}</p>
+                        </td>
+                        <td className="px-10 py-7">
+                          <div className="flex justify-center">
+                            <span className={`px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center space-x-2 border shadow-sm ${
+                              p.riskLevel === RiskLevel.HIGH ? 'bg-red-50 text-red-600 border-red-100' :
+                              p.riskLevel === RiskLevel.MEDIUM ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                              'bg-green-50 text-green-600 border-green-100'
+                            }`}>
+                              <div className={`w-2 h-2 rounded-full ${
+                                p.riskLevel === RiskLevel.HIGH ? 'bg-red-500 animate-pulse' :
+                                p.riskLevel === RiskLevel.MEDIUM ? 'bg-amber-500' :
+                                'bg-green-500'
+                              }`}></div>
+                              <span>{p.riskLevel === RiskLevel.HIGH ? 'Immediate' : p.riskLevel === RiskLevel.MEDIUM ? 'Watch' : 'Safe'}</span>
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-10 py-7">
+                           <div className="flex items-center space-x-2">
+                             {p.riskLevel === RiskLevel.LOW ? (
+                               <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                             ) : p.riskLevel === RiskLevel.HIGH ? (
+                               <ICONS.Heart className="w-4 h-4 text-red-500 animate-pulse" />
+                             ) : (
+                               <ICONS.Pulse className="w-4 h-4 text-amber-500" />
+                             )}
+                             <span className={`text-[11px] font-black uppercase tracking-tight ${
+                               p.riskLevel === RiskLevel.HIGH ? 'text-red-500' :
+                               p.riskLevel === RiskLevel.MEDIUM ? 'text-amber-600' :
+                               'text-slate-600'
+                             }`}>{p.lastAlertTitle}</span>
+                           </div>
+                           <p className="text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-widest">{p.lastAlertTime}</p>
+                        </td>
+                        <td className="px-10 py-7">
+                          <div className="flex space-x-8">
+                            <div>
+                               <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">HR</p>
+                               <p className={`text-sm font-black mt-0.5 ${p.vitalHR > 100 ? 'text-red-500' : 'text-slate-800'}`}>{p.vitalHR} <span className="text-[9px] font-bold opacity-40">bpm</span></p>
+                            </div>
+                            <div>
+                               <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">BP</p>
+                               <p className={`text-sm font-black mt-0.5 ${p.vitalBP.split('/')[0] > '135' ? 'text-amber-500' : 'text-slate-800'}`}>{p.vitalBP}</p>
+                            </div>
+                            {p.id === 'p5' && (
+                              <div>
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">TEMP</p>
+                                <p className="text-sm font-black text-amber-500 mt-0.5">{p.vitalTemp}°F</p>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-10 py-7">
+                          <button className="p-3 text-slate-400 hover:text-slate-900 transition-colors bg-slate-50 rounded-xl group-hover:bg-slate-100">
+                            <ICONS.MoreVertical className="w-5 h-5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'analytics' && (
+          <div className="max-w-6xl mx-auto space-y-12 animate-fade-in">
+             <header className="flex justify-between items-end">
+              <div>
+                <h1 className="text-5xl font-black text-slate-900 tracking-tighter">AI Health Assessment</h1>
+                <p className="text-slate-500 mt-3 font-semibold text-lg max-w-2xl">Holistic real-time analysis based on your biometric patterns. Last update 2 mins ago.</p>
+              </div>
+              <button className="flex items-center space-x-4 bg-[#0EA5E9] hover:bg-sky-600 px-10 py-5 rounded-[24px] text-white font-black transition-all shadow-xl shadow-sky-100 hover:-translate-y-1 group">
+                <ICONS.Download className="w-6 h-6 group-hover:animate-bounce" />
+                <span>DOWNLOAD FULL REPORT</span>
+              </button>
+            </header>
+
+            <div className="grid grid-cols-12 gap-10">
+              {/* Risk Profile Card */}
+              <div className="col-span-4 glass-card rounded-[48px] p-12 flex flex-col items-center">
+                <div className="flex justify-between w-full mb-6">
+                   <h3 className="text-[11px] font-black text-slate-400 tracking-widest uppercase">Current Risk Profile</h3>
+                   <span className="bg-green-500/10 text-green-500 text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest border border-green-100">Stable</span>
+                </div>
+                <RiskGauge score={riskScore} level={riskScore > 60 ? 'IMMEDIATE' : riskScore > 35 ? 'WATCH' : 'SAFE'} />
+                
+                <div className="w-full mt-12 pt-12 border-t border-slate-50 grid grid-cols-3 gap-6 text-center">
+                  {[
+                    { label: 'Heart Rate', val: latest.heartRate.toFixed(0), unit: 'bpm' },
+                    { label: 'BP Index', val: '120/80', unit: 'mmHg' },
+                    { label: 'SpO2 Sat', val: latest.spo2.toFixed(0) + '%', unit: 'Oxy' },
+                  ].map((s, i) => (
+                    <div key={i} className={i === 1 ? 'border-x border-slate-50 px-4' : ''}>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{s.label}</p>
+                      <p className="text-xl font-black text-slate-900 mt-2 tracking-tight">{s.val}</p>
+                      <p className="text-[10px] text-slate-300 font-bold uppercase mt-1">{s.unit}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-12 bg-amber-50 rounded-[32px] p-8 border border-amber-100 flex items-start space-x-5 w-full transition-transform hover:scale-[1.02]">
+                  <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-amber-500 flex-shrink-0 shadow-sm">
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">Review Needed</h4>
+                    <p className="text-sm text-amber-800/70 mt-1 leading-relaxed font-medium italic">Slight irregularity detected in sleep cycles over the last 3 nights.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* AI Recommendations Column */}
+              <div className="col-span-8 space-y-10">
+                <div className="glass-card rounded-[48px] p-12 relative overflow-hidden group">
+                  <div className="absolute -top-20 -right-20 w-80 h-80 bg-sky-50 rounded-full blur-3xl transition-all group-hover:bg-sky-100/50"></div>
+                  <div className="flex items-center space-x-5 mb-10">
+                    <div className="w-14 h-14 bg-[#0EA5E9] rounded-[22px] flex items-center justify-center shadow-xl shadow-sky-100">
+                      <ICONS.Sparkles className="w-7 h-7 text-white" />
+                    </div>
+                    <h3 className="text-3xl font-black text-slate-900 tracking-tight">Dr. AI Recommendations</h3>
+                  </div>
+                  
+                  <div className="relative p-10 rounded-[36px] bg-slate-50 border border-slate-100">
+                    <div className="text-xl font-medium text-slate-600 leading-relaxed italic">
+                      {isAnalyzing ? (
+                        <div className="flex items-center space-x-4 py-6">
+                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-sky-500"></div>
+                          <p className="text-slate-400 font-bold uppercase tracking-widest text-sm">Synthesizing clinical insights...</p>
+                        </div>
+                      ) : (
+                        aiInsights || "Awaiting live telemetry streams to synthesize personal health recommendations..."
+                      )}
+                    </div>
+                    <div className="absolute -left-1 top-10 w-2 h-16 bg-[#0EA5E9] rounded-full shadow-[0_0_15px_#0EA5E9]"></div>
+                  </div>
+
+                  {/* Feature Action Cards */}
+                  <div className="grid grid-cols-3 gap-8 mt-12">
+                    {[
+                      { title: 'Hydration Alert', text: 'Sodium levels elevated. +500ml water recommended.', icon: <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.673.337a4 4 0 01-2.547.463l-4.574-.832a2 2 0 00-1.022.547l-1.013 1.014a2 2 0 00-.547 1.022l-.477 2.387a6 6 0 00.517 3.86l.337.673a4 4 0 01.463 2.547l-.832 4.574a2 2 0 00.547 1.022l1.014 1.013z" /></svg>, color: 'sky' },
+                      { title: 'Sleep Quality', text: 'REM cycle variance is low. Excellent recovery score.', icon: <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>, color: 'indigo' },
+                      { title: 'Movement Goal', text: 'Achieve 15 mins of light activity to optimize HRV.', icon: <ICONS.Pulse />, color: 'emerald' },
+                    ].map((card, i) => (
+                      <div key={i} className="glass-card p-8 rounded-[36px] border border-slate-100 hover:border-sky-400/50 hover:bg-sky-50/20 transition-all group/card cursor-pointer">
+                        <div className={`w-12 h-12 bg-${card.color}-50 rounded-2xl flex items-center justify-center text-${card.color}-500 mb-6 group-hover/card:bg-${card.color}-500 group-hover/card:text-white transition-all shadow-sm`}>
+                          <div className="w-6 h-6">{card.icon}</div>
+                        </div>
+                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest">{card.title}</h4>
+                        <p className="text-xs text-slate-400 mt-2 font-medium leading-relaxed">{card.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <h3 className="text-2xl font-black text-slate-900 tracking-tight px-6 uppercase tracking-widest text-xs opacity-50">Detected Biometric Patterns</h3>
+                  {DETECTED_PATTERNS.map((pattern, idx) => (
+                    <div key={pattern.id} className="glass-card rounded-[32px] p-7 border border-slate-100 flex items-center justify-between group cursor-pointer hover:bg-slate-50 transition-all animate-fade-in" style={{ animationDelay: `${idx * 0.1}s` }}>
+                      <div className="flex items-center space-x-8">
+                        <div className={`w-16 h-16 rounded-[24px] flex items-center justify-center flex-shrink-0 transition-all shadow-sm ${
+                          pattern.iconType === 'HEART' ? 'bg-rose-50 text-rose-500 group-hover:bg-rose-500 group-hover:text-white' :
+                          pattern.iconType === 'OXYGEN' ? 'bg-sky-50 text-sky-500 group-hover:bg-sky-500 group-hover:text-white' :
+                          'bg-amber-50 text-amber-500 group-hover:bg-amber-500 group-hover:text-white'
+                        }`}>
+                          {pattern.iconType === 'HEART' ? <ICONS.Heart className="w-8 h-8" /> : <ICONS.Pulse className="w-8 h-8" />}
+                        </div>
+                        <div>
+                          <h4 className="text-xl font-black text-slate-900 tracking-tight">{pattern.title}</h4>
+                          <p className="text-sm text-slate-400 mt-1 font-medium">{pattern.description}</p>
+                        </div>
+                      </div>
+                      <div className="text-right flex flex-col items-end">
+                        <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-3">{pattern.timestamp}</span>
+                        {pattern.severity !== RiskLevel.LOW && (
+                          <span className={`text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest border ${
+                            pattern.severity === RiskLevel.HIGH ? 'bg-red-50 text-red-500 border-red-100' : 'bg-amber-50 text-amber-500 border-amber-100'
+                          }`}>
+                            {pattern.severity}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'dashboard' && user.role === UserRole.PATIENT && (
+          <div className="grid grid-cols-12 gap-8 animate-fade-in">
+             <div className="col-span-8 space-y-8">
+                <div className="grid grid-cols-4 gap-6">
+                  <VitalCard label="Heart Rate" value={latest.heartRate.toFixed(0)} unit="bpm" icon={<ICONS.Pulse />} color="#0EA5E9" data={vitalsHistory.map(v => ({val: v.heartRate}))} />
+                  <VitalCard label="Blood Pressure" value="120/80" unit="mmHg" icon={<svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>} color="#F59E0B" data={vitalsHistory.map(v => ({val: v.bloodPressure?.systolic}))} />
+                  <VitalCard label="Oxygen Sat" value={latest.spo2.toFixed(1)} unit="%" icon={<ICONS.Heart />} color="#22C55E" data={vitalsHistory.map(v => ({val: v.spo2}))} />
+                  <VitalCard label="Body Temp" value={latest.temperature.toFixed(1)} unit="°F" icon={<ICONS.Thermometer />} color="#64748B" data={vitalsHistory.map(v => ({val: v.temperature}))} />
+                </div>
+
+                <div className="glass-card rounded-[40px] p-10 border border-slate-200">
+                  <div className="flex justify-between items-center mb-10">
+                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">Real-time Telemetry</h3>
+                    <div className="flex bg-slate-50 rounded-2xl p-1.5 border border-slate-100">
+                      {['1H', '4H', '24H'].map(t => (
+                        <button key={t} className={`px-6 py-2 rounded-xl text-[11px] font-black transition-all ${t === '4H' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-900'}`}>{t}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="h-80 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={vitalsHistory}>
+                        <defs>
+                          <linearGradient id="liveGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#0EA5E9" stopOpacity={0.2}/>
+                            <stop offset="95%" stopColor="#0EA5E9" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                        <XAxis hide dataKey="timestamp" />
+                        <YAxis hide domain={['dataMin - 10', 'dataMax + 10']} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#fff', border: '1px solid #E2E8F0', borderRadius: '16px', fontSize: '12px', fontWeight: 'bold' }}
+                          itemStyle={{ color: '#0EA5E9' }}
+                        />
+                        <Area type="monotone" dataKey="heartRate" stroke="#0EA5E9" fill="url(#liveGradient)" strokeWidth={4} dot={false} isAnimationActive={false} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+             </div>
+             
+             <div className="col-span-4 space-y-8">
+                <div className="glass-card rounded-[40px] p-10 bg-gradient-to-br from-slate-900 to-slate-800 text-white border-0 shadow-2xl">
+                   <div className="flex items-center space-x-3 mb-8">
+                     <div className="w-10 h-10 bg-sky-500 rounded-xl flex items-center justify-center">
+                       <ICONS.Sparkles className="w-6 h-6 text-white" />
+                     </div>
+                     <h3 className="text-xl font-black">AI Recommendations</h3>
+                   </div>
+                   <p className="text-sm font-medium leading-relaxed text-slate-300 italic">
+                     {aiInsights || "Generating clinical patterns..."}
+                   </p>
+                   <div className="mt-10 pt-10 border-t border-white/5 space-y-4">
+                     {[
+                       { t: 'Hydration', s: '+500ml Needed', c: 'sky' },
+                       { t: 'Activity', s: '15m Light Walk', c: 'emerald' },
+                       { t: 'Rest', s: 'Bedtime 10:30 PM', c: 'indigo' },
+                     ].map((rec, i) => (
+                       <div key={i} className="flex justify-between items-center p-4 rounded-2xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer group">
+                         <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{rec.t}</span>
+                         <span className={`text-xs font-black text-${rec.c}-400 group-hover:text-white transition-colors`}>{rec.s}</span>
+                       </div>
+                     ))}
+                   </div>
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* Calendar and Messages placeholders with dummy data */}
+        {(activeTab === 'calendar' || activeTab === 'messages') && (
+           <div className="glass-card rounded-[40px] p-24 text-center border border-slate-100 animate-fade-in">
+              <div className="w-24 h-24 bg-slate-50 rounded-[32px] flex items-center justify-center mx-auto mb-10 text-slate-300">
+                {activeTab === 'calendar' ? <ICONS.Calendar className="w-12 h-12" /> : <ICONS.Message className="w-12 h-12" />}
+              </div>
+              <h2 className="text-3xl font-black text-slate-900 tracking-tighter">
+                {activeTab === 'calendar' ? 'Clinical Appointments' : 'Secure Medical Inbox'}
+              </h2>
+              <p className="text-slate-400 mt-3 font-semibold max-w-sm mx-auto">
+                {activeTab === 'calendar' ? 'Manage upcoming clinical consultations and vital check-ups.' : 'Communicate securely with clinical staff and receive AI insight summaries.'}
+              </p>
+              <button className="mt-10 px-10 py-4 bg-slate-900 text-white rounded-2xl font-black text-sm hover:bg-slate-800 transition-all">
+                {activeTab === 'calendar' ? 'SCHEDULE APPOINTMENT' : 'OPEN INBOX'}
+              </button>
+           </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;
